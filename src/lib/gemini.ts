@@ -1,9 +1,10 @@
 // Gemini AI integration service
 
-const GEMINI_FUNCTION_URL = 'https://swzypvvwwiqzciwemvxw.supabase.co/functions/v1/900f54f5-6c85-4553-91e6-048cd6afc34c';
+// Updated Gemini edge function URL
+const GEMINI_FUNCTION_URL = 'https://swzypvvwwiqzciwemvxw.supabase.co/functions/v1/07aedc15-5887-4f0f-bac5-adf6707617cb';
 
 export interface GeminiResponse {
-  result?: string;
+  result?: string | any[] | object; // Updated to allow array or object for parsed JSON
   error?: string;
 }
 
@@ -17,36 +18,47 @@ export interface OptimalAnswerResult {
 }
 
 export const geminiService = {
-  async analyzeResume(resumeText: string, interviewType: string): Promise<string[]> {
+  async analyzeResume(resumeFile: File, interviewType: string): Promise<string[]> { // Changed resumeText to resumeFile (File)
     try {
-      console.log('Analyzing resume with Gemini:', { resumeText: resumeText.substring(0, 100), interviewType });
-      
+      console.log('Analyzing resume with Gemini:', { fileName: resumeFile.name, interviewType });
+
+      const formData = new FormData();
+      formData.append('action', 'analyze_resume');
+      formData.append('interviewType', interviewType);
+      formData.append('resumeFile', resumeFile); // Append the file
+
       const response = await fetch(GEMINI_FUNCTION_URL, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'analyze_resume',
-          data: { resumeText, interviewType }
-        })
+        body: formData, // Use FormData for multipart/form-data
+        // The 'Content-Type' header is automatically set by fetch when using FormData
       });
 
       const result: GeminiResponse = await response.json();
-      console.log('Gemini response:', result);
-      
-      if (result.error) {
+      console.log('Gemini response for analyzeResume:', result);
+
+      if (!response.ok) {
+           // Handle HTTP errors
+           const errorMessage = result.error || `HTTP error! status: ${response.status}`;
+           console.error('Edge function error:', errorMessage);
+           throw new Error(`Error analyzing resume: ${errorMessage}`);
+      }
+      else if (result.error) {
         console.error('Gemini error:', result.error);
         throw new Error(result.error);
       }
 
-      // Parse questions from Gemini response
-      const questions = this.parseQuestions(result.result || '');
-      console.log('Parsed questions:', questions);
-      
-      return questions.length >= 15 ? questions.slice(0, 15) : this.getFallbackQuestions(interviewType);
+      // Expecting result.result to be an array of strings (questions)
+      if (result.result && Array.isArray(result.result)) {
+         console.log('Parsed questions:', result.result);
+         return result.result as string[];
+      } else {
+         console.error('Unexpected response format for questions:', result);
+         throw new Error('Received unexpected response format for questions.');
+      }
+
     } catch (error) {
       console.error('Gemini analysis failed:', error);
+      // Return fallback questions on error
       return this.getFallbackQuestions(interviewType);
     }
   },
@@ -65,12 +77,26 @@ export const geminiService = {
       });
 
       const result: GeminiResponse = await response.json();
-      
-      if (result.error) {
+       console.log('Gemini response for validateAnswer:', result);
+
+      if (!response.ok) {
+           const errorMessage = result.error || `HTTP error! status: ${response.status}`;
+           console.error('Edge function error:', errorMessage);
+           throw new Error(`Error validating answer: ${errorMessage}`);
+      }
+      else if (result.error) {
         throw new Error(result.error);
       }
 
-      return this.parseValidation(result.result || '');
+      // Expecting result.result to be a ValidationResult object
+      if (result.result && typeof result.result === 'object' && 'rating' in result.result && 'feedback' in result.result) {
+           const validation = result.result as ValidationResult;
+           return { rating: Math.max(1, Math.min(5, validation.rating)), feedback: validation.feedback };
+      } else {
+          console.error('Unexpected response format for validation:', result);
+          throw new Error('Received unexpected response format for validation.');
+      }
+
     } catch (error) {
       console.error('Validation failed:', error);
       return {
@@ -94,75 +120,70 @@ export const geminiService = {
       });
 
       const result: GeminiResponse = await response.json();
-      
-      if (result.error) {
+       console.log('Gemini response for getOptimalAnswer:', result);
+
+      if (!response.ok) {
+           const errorMessage = result.error || `HTTP error! status: ${response.status}`;
+           console.error('Edge function error:', errorMessage);
+           throw new Error(`Error getting optimal answer: ${errorMessage}`);
+      }
+      else if (result.error) {
         throw new Error(result.error);
       }
 
-      return this.parseOptimalAnswer(result.result || '');
+      // Expecting result.result to be an object with an 'answer' field
+      if (result.result && typeof result.result === 'object' && 'answer' in result.result) {
+           return (result.result as OptimalAnswerResult).answer;
+      } else {
+          console.error('Unexpected response format for optimal answer:', result);
+          throw new Error('Received unexpected response format for optimal answer.');
+      }
+
     } catch (error) {
       console.error('Optimal answer failed:', error);
       return 'Unable to generate optimal answer at this time.';
     }
   },
 
-  parseQuestions(text: string): string[] {
+  async addPunctuationToTranscript(transcript: string): Promise<string> {
     try {
-      // Clean the text first
-      let cleanText = text.trim();
-      if (cleanText.startsWith('```json')) {
-        cleanText = cleanText.replace(/```json\s*/, '').replace(/```\s*$/, '');
-      }
-      
-      const parsed = JSON.parse(cleanText);
-      if (Array.isArray(parsed)) {
-        return parsed.filter(q => typeof q === 'string' && q.trim().length > 0);
-      }
-    } catch (e) {
-      console.warn('Failed to parse JSON questions, trying fallback parsing');
-      // Fallback parsing
-      const lines = text.split('\n').filter(line => line.trim());
-      return lines.map(line => line.replace(/^\d+\.\s*/, '').replace(/^["']|["']$/g, '').trim()).filter(q => q.length > 0);
-    }
-    return [];
-  },
+      const response = await fetch(GEMINI_FUNCTION_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'add_punctuation', // A new action for your Edge Function
+          data: { text: transcript }
+        })
+      });
 
-  parseValidation(text: string): ValidationResult {
-    try {
-      let cleanText = text.trim();
-      if (cleanText.startsWith('```json')) {
-        cleanText = cleanText.replace(/```json\s*/, '').replace(/```\s*$/, '');
-      }
-      
-      const parsed = JSON.parse(cleanText);
-      if (parsed.rating && parsed.feedback) {
-        return { rating: Math.max(1, Math.min(5, parsed.rating)), feedback: parsed.feedback };
-      }
-    } catch (e) {
-      console.warn('Failed to parse validation JSON');
-    }
-    return {
-      rating: Math.floor(Math.random() * 3) + 2,
-      feedback: 'Good effort! Keep practicing to improve your responses.'
-    };
-  },
+      const result: GeminiResponse = await response.json();
+      console.log('Gemini response for addPunctuationToTranscript:', result);
 
-  parseOptimalAnswer(text: string): string {
-    try {
-      let cleanText = text.trim();
-      if (cleanText.startsWith('```json')) {
-        cleanText = cleanText.replace(/```json\s*/, '').replace(/```\s*$/, '');
+      if (!response.ok) {
+        const errorMessage = result.error || `HTTP error! status: ${response.status}`;
+        console.error('Edge function error:', errorMessage);
+        throw new Error(`Error adding punctuation: ${errorMessage}`);
+      } else if (result.error) {
+        throw new Error(result.error);
       }
-      
-      const parsed = JSON.parse(cleanText);
-      if (parsed.answer) {
-        return parsed.answer;
+
+      // Assuming the Edge Function returns the punctuated text in result.result
+      if (result.result && typeof result.result === 'string') {
+        return result.result;
+      } else {
+        console.error('Unexpected response format for punctuation:', result);
+        throw new Error('Received unexpected response format for punctuation.');
       }
-    } catch (e) {
-      // Return raw text if not JSON
+    } catch (error) {
+      console.error('Adding punctuation failed:', error);
+      // Return the original transcript on error
+      return transcript;
     }
-    return text || 'Practice highlighting your relevant experience and skills.';
   },
+    // Note: The parse methods are no longer needed as the edge function is expected to return parsed JSON directly.
+    // I will remove them in the next turn.
 
   getFallbackQuestions(interviewType: string): string[] {
     const fallbackQuestions = {
@@ -215,8 +236,7 @@ export const geminiService = {
         'How do you ensure test coverage?',
         'Describe your experience with mobile app testing.',
         'How do you handle testing in agile environments?',
-        'What is your approach to user acceptance testing?'
-      ]
+        'What is your approach to user acceptance testing?']
     };
 
     const questions = fallbackQuestions[interviewType as keyof typeof fallbackQuestions] || fallbackQuestions.hr;

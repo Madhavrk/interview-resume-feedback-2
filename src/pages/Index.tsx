@@ -17,38 +17,62 @@ const Index = () => {
   const [user, setUser] = useState<User | null>(null);
   const [userEmail, setUserEmail] = useState('');
   const [resumeFile, setResumeFile] = useState<File | null>(null);
-  const [interviewType, setInterviewType] = useState<'technical' | 'hr' | 'testcase'>('technical');
+  const [selectedInterviewType, setSelectedInterviewType] = useState<'technical' | 'hr' | 'testcase'>('technical');
   const [isLoading, setIsLoading] = useState(true);
   const [analysisProgress, setAnalysisProgress] = useState(0);
+  const [interviewQuestions, setInterviewQuestions] = useState<string[]>([]);
+
+  useEffect(() => {
+    console.log('Current state changed to:', currentState);
+  }, [currentState]);
+
 
   useEffect(() => {
     const checkAuth = async () => {
       try {
         const currentUser = await authService.getCurrentUser();
+        setUser(currentUser);
         if (currentUser) {
-          setUser(currentUser);
+           setCurrentState('resume');
+        } else {
+           setCurrentState('intro');
         }
       } catch (error) {
         console.error('Auth check error:', error);
+         setCurrentState('intro');
       } finally {
         setIsLoading(false);
       }
     };
     checkAuth();
 
-    const { data: { subscription } } = authService.onAuthStateChange((user) => {
-      setUser(user);
-    });
+    const { data: { subscription } } = authService.onAuthStateChange(
+      ((_event: any, session: any) => {
+        const currentUser = session?.user ?? null;
+        setUser(currentUser);
+         if (currentUser) {
+             setCurrentState('resume');
+         } else {
+              setCurrentState('intro');
+         }
+      }) as (user: User | null) => void
+    );
+
 
     return () => subscription.unsubscribe();
   }, []);
 
+
   const handleGetStarted = () => {
-    setCurrentState('login');
+     if (user) {
+        setCurrentState('resume');
+     } else {
+        setCurrentState('login');
+     }
   };
 
   const handleLogin = () => {
-    setCurrentState('intro');
+    setCurrentState('resume');
   };
 
   const handleSignUp = (email: string) => {
@@ -57,7 +81,7 @@ const Index = () => {
   };
 
   const handleOTPVerified = () => {
-    setCurrentState('intro');
+    setCurrentState('login');
   };
 
   const handleStartInterview = () => {
@@ -65,93 +89,158 @@ const Index = () => {
   };
 
   const handleResumeUploaded = (file: File) => {
+    console.log('Resume uploaded in Index. File:', file.name);
     setResumeFile(file);
-    setCurrentState('analyzing');
-    setAnalysisProgress(0);
-    
-    // Simulate analysis progress
-    const interval = setInterval(() => {
-      setAnalysisProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setTimeout(() => setCurrentState('options'), 500);
-          return 100;
-        }
-        return prev + 10;
-      });
-    }, 300);
+    setCurrentState('options');
   };
 
+   const generateInterviewQuestions = async (file: File, type: 'technical' | 'hr' | 'testcase') => {
+       setIsLoading(true);
+       setAnalysisProgress(0);
+       setCurrentState('analyzing');
+       console.log(`Generating ${type} interview questions...`);
+
+       const formData = new FormData();
+       formData.append('action', 'analyze_resume');
+       formData.append('interviewType', type);
+       formData.append('resumeFile', file);
+
+       console.log('Attempting to fetch from Edge Function...');
+       console.log('Edge Function URL:', 'https://swzypvvwwiqzciwemvxw.supabase.co/functions/v1/07aedc15-5887-4f0f-bac5-adf6707617cb');
+
+
+       try {
+           console.log('Inside try block for fetch.');
+           const progressInterval = setInterval(() => {
+             setAnalysisProgress(prev => prev < 90 ? prev + 5 : prev);
+           }, 200);
+
+           const response = await fetch('https://swzypvvwwiqzciwemvxw.supabase.co/functions/v1/07aedc15-5887-4f0f-bac5-adf6707617cb', {
+             method: 'POST',
+             body: formData,
+           });
+
+            clearInterval(progressInterval);
+
+           const result = await response.json();
+
+           if (!response.ok || result.error) {
+               const errorMessage = result.error || `HTTP error! status: ${response.status}`;
+               console.error('Edge function error during question generation:', errorMessage);
+                setInterviewQuestions([]);
+                setCurrentState('options');
+           } else if (result.result && Array.isArray(result.result)) {
+               console.log('Successfully generated questions:', result.result.length);
+               setInterviewQuestions(result.result);
+               setAnalysisProgress(100);
+
+               setCurrentState('interview');
+
+           } else {
+                console.error('Unexpected edge function response during question generation:', result);
+                 setInterviewQuestions([]);
+                 setCurrentState('options');
+           }
+
+       } catch (error: any) {
+           console.log('Inside catch block for fetch.');
+           console.error('Fetch error during question generation:', error);
+            setInterviewQuestions([]);
+            setCurrentState('options');
+       } finally {
+            setIsLoading(false);
+       }
+   };
+
+
   const handleInterviewTypeSelected = (type: 'technical' | 'hr' | 'testcase') => {
-    setInterviewType(type);
-    setCurrentState('interview');
+    console.log('Interview type selected:', type);
+    setSelectedInterviewType(type);
+    if (resumeFile) {
+        generateInterviewQuestions(resumeFile, type);
+    } else {
+        console.error('No resume file available for question generation.');
+        setCurrentState('resume');
+    }
   };
 
   const handleFinishInterview = () => {
-    setCurrentState('intro');
-    setResumeFile(null);
+    setInterviewQuestions([]);
+    // setResumeFile(null); // REMOVED this line to keep the resume file
+    setCurrentState('options'); // CHANGED this to go to the options page
   };
 
   const handleQuitInterview = () => {
+    setInterviewQuestions([]);
     setCurrentState('options');
   };
 
   const handleLogout = async () => {
     await authService.signOut();
-    setUser(null);
-    setCurrentState('intro');
-    setResumeFile(null);
+    console.log('User logged out');
   };
+
 
   if (isLoading) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center">
-        <div className="text-white">Loading...</div>
+        <div className="text-center">
+           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-500 mx-auto mb-4"></div>
+           <p className="text-white">{currentState === 'analyzing' ? 'Analyzing resume and generating questions...' : 'Loading...'}</p>
+           {currentState === 'analyzing' && <p className="text-gray-400 text-sm mt-2">{analysisProgress}%</p>}
+        </div>
       </div>
     );
   }
 
-  switch (currentState) {
-    case 'intro':
-      return <IntroductionPage onGetStarted={handleGetStarted} user={user} onLogout={handleLogout} onStartInterview={handleStartInterview} />;
-    
-    case 'login':
-      return <LoginPage onLogin={handleLogin} onSignUp={() => setCurrentState('signup')} />;
-    
-    case 'signup':
-      return <SignUpPage onSignUp={handleSignUp} onBackToLogin={() => setCurrentState('login')} />;
-    
-    case 'otp':
-      return <OTPPage email={userEmail} onVerifyOTP={handleOTPVerified} onResendOTP={() => {}} />;
-    
-    case 'resume':
-      return <ResumeUpload onResumeUploaded={handleResumeUploaded} />;
-    
-    case 'analyzing':
-      return resumeFile ? (
-        <ResumeAnalyzing fileName={resumeFile.name} progress={analysisProgress} />
-      ) : null;
-    
-    case 'options':
-      return <InterviewOptions onSelectOption={handleInterviewTypeSelected} />;
-    
-    case 'interview':
-      return resumeFile ? (
-        <InterviewSession 
-          interviewType={interviewType} 
-          resumeFile={resumeFile} 
-          onFinish={handleFinishInterview}
-          onQuit={handleQuitInterview}
-        />
-      ) : (
-        <div className="min-h-screen bg-black flex items-center justify-center">
-          <p className="text-white">No resume file found</p>
-        </div>
-      );
-    
-    default:
-      return <IntroductionPage onGetStarted={handleGetStarted} user={user} onLogout={handleLogout} onStartInterview={handleStartInterview} />;
-  }
+
+  const renderCurrentState = () => {
+    console.log('Rendering state in renderCurrentState:', currentState);
+    switch (currentState) {
+      case 'intro':
+        return <IntroductionPage onGetStarted={handleGetStarted} user={user} onLogout={handleLogout} onStartInterview={handleStartInterview} />;
+
+      case 'login':
+        return <LoginPage onLogin={handleLogin} onSignUp={() => setCurrentState('signup')} />;
+
+      case 'signup':
+        return <SignUpPage onSignUp={handleSignUp} onBackToLogin={() => setCurrentState('login')} />;
+
+      case 'otp':
+        return <OTPPage email={userEmail} onVerifyOTP={handleOTPVerified} onResendOTP={() => {}} />;
+
+      case 'resume':
+        return <ResumeUpload interviewType={selectedInterviewType} onAnalysisComplete={handleResumeUploaded} />;
+
+      case 'analyzing':
+         return analysisProgress < 100 ? (
+             <ResumeAnalyzing fileName="Your Resume" progress={analysisProgress} />
+         ) : null;
+
+
+      case 'options':
+        return <InterviewOptions onSelectOption={handleInterviewTypeSelected} onLogout={handleLogout} />;
+
+      case 'interview':
+        return interviewQuestions.length > 0 ? (
+          <InterviewSession
+            interviewType={selectedInterviewType}
+            interviewQuestions={interviewQuestions}
+            onFinish={handleFinishInterview}
+            onQuit={handleQuitInterview}
+          />
+        ) : (
+          <div className="min-h-screen bg-black flex items-center justify-center">
+            <p className="text-white">Loading interview questions...</p>
+          </div>
+        );
+
+      default:
+        return <IntroductionPage onGetStarted={handleGetStarted} user={user} onLogout={handleLogout} onStartInterview={handleStartInterview} />;
+    }
+  };
+
+  return <div className="min-h-screen">{renderCurrentState()}</div>;
 };
 
 export default Index;

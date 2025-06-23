@@ -7,9 +7,10 @@ type InterviewType = 'technical' | 'hr' | 'testcase';
 
 interface InterviewOptionsProps {
   onSelectOption: (option: InterviewType) => void;
+  onLogout: () => void;
 }
 
-const InterviewOptions: React.FC<InterviewOptionsProps> = ({ onSelectOption }) => {
+const InterviewOptions: React.FC<InterviewOptionsProps> = ({ onSelectOption, onLogout }) => {
   const options = [
     {
       type: 'technical' as InterviewType,
@@ -83,6 +84,15 @@ const InterviewOptions: React.FC<InterviewOptionsProps> = ({ onSelectOption }) =
               );
             })}
           </div>
+
+          {/* Logout Button */}
+          <Button
+            onClick={onLogout}
+            variant="outline"
+            className="w-full mt-8 border-white/20 text-white hover:bg-white/10 hover:border-white/30 transition-all duration-300"
+          >
+            Logout
+          </Button>
         </div>
       </div>
     </div>

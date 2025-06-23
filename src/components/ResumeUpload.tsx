@@ -1,25 +1,49 @@
 import React, { useState, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Upload, FileText, Sparkles } from 'lucide-react';
+import { Upload, FileText, Sparkles, Loader2 } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
 
 interface ResumeUploadProps {
-  onResumeUploaded: (file: File) => void;
+  interviewType: string; // Still need this prop, although not used in handleFileUpload anymore
+  // Changed the type of onAnalysisComplete to accept a File
+  onAnalysisComplete: (file: File) => void;
 }
 
-const ResumeUpload: React.FC<ResumeUploadProps> = ({ onResumeUploaded }) => {
+const ResumeUpload: React.FC<ResumeUploadProps> = ({ interviewType, onAnalysisComplete }) => {
   const [dragOver, setDragOver] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  // Loading state is now for the upload process itself, not analysis
+  const [loading, setLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
 
-  const handleFileUpload = (file: File) => {
+  // Modify handleFileUpload to only handle file selection and pass the file to the parent
+  const handleFileUpload = async (file: File) => {
     if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
       setUploadedFile(file);
-      onResumeUploaded(file);
+      setLoading(true); // Indicate upload is in progress (though the actual upload happens in the parent)
+
+      // Call the onAnalysisComplete prop with the file object
+      // The actual analysis and question generation will be triggered by the parent component
+      onAnalysisComplete(file);
+
+      // Remove the fetch call to the edge function and all the subsequent logic
+      // for handling the response and calling onAnalysisComplete with questions.
+      // That logic is now in the parent component (Index.tsx).
+
+      setLoading(false); // Set loading to false after the file is passed to the parent
+
     } else {
-      alert('Please upload a PDF file');
+      toast({
+        title: "Invalid File Type",
+        description: "Please upload a PDF file",
+        variant: "destructive"
+      });
+      setUploadedFile(null);
     }
   };
+
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -39,7 +63,7 @@ const ResumeUpload: React.FC<ResumeUploadProps> = ({ onResumeUploaded }) => {
 
   return (
     <div className="min-h-screen relative overflow-hidden bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
-      <div 
+      <div
         className="absolute inset-0 bg-cover bg-center bg-no-repeat"
         style={{
           backgroundImage: 'url("https://images.unsplash.com/photo-1586281380349-632531db7ed4?ixlib=rb-4.0.3&auto=format&fit=crop&w=1926&q=80")',
@@ -53,7 +77,7 @@ const ResumeUpload: React.FC<ResumeUploadProps> = ({ onResumeUploaded }) => {
           <CardHeader className="text-center space-y-4">
             <div className="flex items-center justify-center space-x-2">
               <Sparkles className="w-8 h-8 text-purple-400" />
-              <CardTitle className="text-3xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
+              <CardTitle className="text-3xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">\
                 ResQ
               </CardTitle>
             </div>
@@ -68,19 +92,25 @@ const ResumeUpload: React.FC<ResumeUploadProps> = ({ onResumeUploaded }) => {
               onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
               onDragLeave={() => setDragOver(false)}
               onDrop={handleDrop}
-              onClick={handleChooseFile}
+              onClick={handleChooseFile} // Keep click for file input
             >
-              {uploadedFile ? (
+              {loading ? ( // Show loading state
+                <div className="text-purple-400 space-y-4 animate-pulse">
+                    <Loader2 className="w-16 h-16 mx-auto" />
+                    <p className="text-lg font-semibold text-white">Uploading Resume...</p> {/* Updated text */}
+                    {/* Removed analysis progress as it's now in the parent */}
+                </div>
+              ) : uploadedFile ? ( // Show uploaded file info if not loading
                 <div className="text-green-400 space-y-4">
                   <div className="w-16 h-16 mx-auto bg-green-500/20 rounded-full flex items-center justify-center">
                     <FileText className="w-8 h-8" />
                   </div>
                   <div>
                     <p className="text-lg font-semibold text-white">{uploadedFile.name}</p>
-                    <p className="text-sm text-gray-300">Resume uploaded successfully!</p>
+                    <p className="text-sm text-gray-300">Resume uploaded successfully. Select interview type.</p> {/* Updated text */}
                   </div>
                 </div>
-              ) : (
+              ) : ( // Show upload instructions if no file and not loading
                 <div className="text-gray-300 space-y-4">
                   <div className="w-16 h-16 mx-auto bg-purple-500/20 rounded-full flex items-center justify-center">
                     <Upload className="w-8 h-8 text-purple-400" />
@@ -88,7 +118,7 @@ const ResumeUpload: React.FC<ResumeUploadProps> = ({ onResumeUploaded }) => {
                   <div>
                     <p className="text-xl mb-2 text-white">Drag and drop your resume here</p>
                     <p className="text-sm mb-6 text-gray-400">or click to browse files</p>
-                    <Button 
+                    <Button
                       onClick={handleChooseFile}
                       className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white cursor-pointer px-8 py-3 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105"
                     >
@@ -99,7 +129,7 @@ const ResumeUpload: React.FC<ResumeUploadProps> = ({ onResumeUploaded }) => {
                 </div>
               )}
             </div>
-            
+
             <input
               ref={fileInputRef}
               type="file"

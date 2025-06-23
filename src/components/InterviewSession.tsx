@@ -7,12 +7,12 @@ import { speechService, recognitionService } from '@/lib/speech';
 
 interface InterviewSessionProps {
   interviewType: 'technical' | 'hr' | 'testcase';
-  resumeFile: File;
   onFinish: () => void;
   onQuit: () => void;
+  interviewQuestions: string[];
 }
 
-const InterviewSession: React.FC<InterviewSessionProps> = ({ interviewType, resumeFile, onFinish, onQuit }) => {
+const InterviewSession: React.FC<InterviewSessionProps> = ({ interviewType, onFinish, onQuit, interviewQuestions }) => {
   const [currentQuestion, setCurrentQuestion] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
   const [userAnswer, setUserAnswer] = useState('');
@@ -21,44 +21,50 @@ const InterviewSession: React.FC<InterviewSessionProps> = ({ interviewType, resu
   const [optimalAnswer, setOptimalAnswer] = useState('');
   const [ratings, setRatings] = useState<number[]>([]);
   const [showFinalScore, setShowFinalScore] = useState(false);
-  const [questions, setQuestions] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [isSpeaking, setIsSpeaking] = useState(false); // Added state for tracking speech
+  const [isProcessingAnswer, setIsProcessingAnswer] = useState(false); // New state for processing user answer
   const [stopRecording, setStopRecording] = useState<(() => void) | null>(null);
   const [recordingError, setRecordingError] = useState('');
   const [showQuitDialog, setShowQuitDialog] = useState(false);
 
+  // Effect to reset state and question index when interviewQuestions change
   useEffect(() => {
-    const loadQuestions = async () => {
-      try {
-        const resumeText = await resumeFile.text();
-        const aiQuestions = await geminiService.analyzeResume(resumeText, interviewType);
-        
-        if (aiQuestions && aiQuestions.length >= 15) {
-          setQuestions(aiQuestions);
-        } else {
-          setQuestions(geminiService.getFallbackQuestions(interviewType));
-        }
-      } catch (error) {
-        console.error('Failed to load questions:', error);
-        setQuestions(geminiService.getFallbackQuestions(interviewType));
-      } finally {
-        setLoading(false);
+    setCurrentQuestion(0);
+    setUserAnswer('');
+    setShowResults(false);
+    setFeedback(null);
+    setOptimalAnswer('');
+    setRecordingError('');
+  }, [interviewQuestions, interviewType]);
+
+  // Effect for cleaning up speech recognition when the component unmounts
+  useEffect(() => {
+    return () => {
+      if (stopRecording) {
+        console.log('Cleaning up recording on unmount.');
+        stopRecording();
       }
     };
-    loadQuestions();
-  }, [resumeFile, interviewType]);
+  }, [stopRecording]);
+
 
   const handleStartRecording = () => {
     if (recognitionService.isSupported()) {
       setIsRecording(true);
       setRecordingError('');
       setUserAnswer('');
-      
+
       const stop = recognitionService.startListening(
         (text) => setUserAnswer(text),
-        (error) => {
-          setRecordingError(`Recording error: ${error}`);
+        // Explicitly cast error to 'any' to resolve type error
+        (error: any) => {
+          console.error('Speech recognition error:', error);
+          setRecordingError(`Recording error: ${typeof error === 'string' ? error : error.message || 'Unknown error'}`);
           setIsRecording(false);
+          if (stopRecording) {
+             stopRecording();
+             setStopRecording(null);
+          }
         }
       );
       setStopRecording(() => stop);
@@ -73,14 +79,26 @@ const InterviewSession: React.FC<InterviewSessionProps> = ({ interviewType, resu
       setStopRecording(null);
     }
     setIsRecording(false);
+
+    // Process the recorded answer for punctuation
     if (userAnswer.trim()) {
-      setShowResults(true);
-    }
+      setIsProcessingAnswer(true); // Set processing state to true
+      geminiService.addPunctuationToTranscript(userAnswer)
+        .then(punctuatedText => {
+          setUserAnswer(punctuatedText); // Update with punctuated text
+          setShowResults(true); // Show results only after processing
+        })
+        .catch(error => {
+          console.error('Error processing answer for punctuation:', error);
+          // Optionally set an error state or display a message to the user
+          setShowResults(true); // Show results even if punctuation fails
+        }).finally(() => setIsProcessingAnswer(false)); // Set processing state to false
+    } else { setShowResults(true); } // Show results even if no answer was recorded
   };
 
   const handleVerifyAnswer = async () => {
     try {
-      const validation = await geminiService.validateAnswer(questions[currentQuestion], userAnswer);
+      const validation = await geminiService.validateAnswer(interviewQuestions[currentQuestion], userAnswer);
       setFeedback({ rating: validation.rating, comment: validation.feedback });
       setRatings([...ratings, validation.rating]);
     } catch (error) {
@@ -92,25 +110,46 @@ const InterviewSession: React.FC<InterviewSessionProps> = ({ interviewType, resu
 
   const handleOptimalAnswer = async () => {
     try {
-      const optimal = await geminiService.getOptimalAnswer(questions[currentQuestion]);
-      setOptimalAnswer(optimal);
+      const optimal = await geminiService.getOptimalAnswer(interviewQuestions[currentQuestion]);
+      setOptimalAnswer(optimal); // Set the optimal answer text first
+
       if (speechService.isSupported()) {
-        await speechService.speak(optimal);
+        setIsSpeaking(true); // Set speaking state to true before initiating speech
+        try {
+          await speechService.speak(optimal); // Wait for the speech to finish
+        } catch (speechError) {
+          console.error('Speech synthesis error:', speechError);
+          // Handle speech error if necessary, but do not clear the optimalAnswer text
+        } finally {
+          setIsSpeaking(false); // Ensure speaking state is set to false after speech attempt
+        }
       }
-    } catch (error) {
+    } catch (geminiError) {
+      console.error('Gemini service error fetching optimal answer:', geminiError);
+      // Only clear the text if there was an error fetching the optimal answer from Gemini
       setOptimalAnswer('Unable to generate optimal answer at this time.');
     }
   };
 
   const handleNextQuestion = () => {
-    if (currentQuestion < 14) {
+    if (currentQuestion < interviewQuestions.length - 1) {
       setCurrentQuestion(prev => prev + 1);
       setUserAnswer('');
       setShowResults(false);
       setFeedback(null);
       setOptimalAnswer('');
       setRecordingError('');
+      if (stopRecording) {
+         stopRecording();
+         setStopRecording(null);
+         setIsRecording(false);
+      }
     } else {
+       if (stopRecording) {
+         stopRecording();
+         setStopRecording(null);
+         setIsRecording(false);
+      }
       setShowFinalScore(true);
     }
   };
@@ -121,7 +160,10 @@ const InterviewSession: React.FC<InterviewSessionProps> = ({ interviewType, resu
 
   const confirmQuit = () => {
     if (stopRecording) {
+      console.log('Stopping recording before confirming quit.');
       stopRecording();
+      setStopRecording(null);
+       setIsRecording(false);
     }
     onQuit();
   };
@@ -134,20 +176,21 @@ const InterviewSession: React.FC<InterviewSessionProps> = ({ interviewType, resu
 
   const speakQuestion = async () => {
     if (speechService.isSupported()) {
-      await speechService.speak(questions[currentQuestion]);
+      await speechService.speak(interviewQuestions[currentQuestion]);
     }
   };
 
-  if (loading) {
-    return (
+  if (interviewQuestions.length === 0) {
+     return (
       <div className="min-h-screen bg-black p-4 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-500 mx-auto mb-4"></div>
-          <p className="text-white">Analyzing resume and generating questions...</p>
+          <p className="text-white">Generating interview questions...</p>
         </div>
       </div>
     );
   }
+
 
   if (showFinalScore) {
     const finalScore = calculateFinalScore();
@@ -178,7 +221,7 @@ const InterviewSession: React.FC<InterviewSessionProps> = ({ interviewType, resu
           <div>
             <h1 className="text-4xl font-bold text-red-500 mb-2">ResQ</h1>
             <p className="text-gray-300">{interviewType.toUpperCase()} Interview</p>
-            <p className="text-sm text-gray-400">Question {currentQuestion + 1} of 15</p>
+            <p className="text-sm text-gray-400">Question {currentQuestion + 1} of {interviewQuestions.length}</p>
           </div>
           <Button onClick={handleQuit} variant="destructive" className="bg-red-600 hover:bg-red-700">
             <X className="mr-2 w-4 h-4" />Quit
@@ -216,8 +259,8 @@ const InterviewSession: React.FC<InterviewSessionProps> = ({ interviewType, resu
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-gray-300 text-lg mb-4">{questions[currentQuestion]}</p>
-            
+            <p className="text-gray-300 text-lg mb-4">{interviewQuestions[currentQuestion]}</p>
+
             {!showResults ? (
               <div className="space-y-4">
                 <div className="flex justify-center gap-4">
@@ -231,7 +274,15 @@ const InterviewSession: React.FC<InterviewSessionProps> = ({ interviewType, resu
                     </Button>
                   )}
                 </div>
-                
+                {isProcessingAnswer && (
+                  <div className="text-center">
+                     <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-red-500 mx-auto mb-2"></div>
+                    <p className="text-gray-400">Processing answer...</p>
+                  </div>
+                )}
+
+
+
                 {isRecording && (
                   <div className="text-center">
                     <div className="animate-pulse text-red-500 mb-2">
@@ -240,13 +291,13 @@ const InterviewSession: React.FC<InterviewSessionProps> = ({ interviewType, resu
                     <p className="text-gray-400">Recording... Speak your answer</p>
                   </div>
                 )}
-                
+
                 {recordingError && (
                   <div className="bg-red-900/50 p-3 rounded border border-red-600 text-center">
                     <p className="text-red-300">{recordingError}</p>
                   </div>
                 )}
-                
+
                 {userAnswer && (
                   <div className="bg-gray-800 p-4 rounded border border-gray-700">
                     <h4 className="text-gray-400 text-sm mb-2">Your Response:</h4>
@@ -265,7 +316,7 @@ const InterviewSession: React.FC<InterviewSessionProps> = ({ interviewType, resu
                   <h4 className="text-red-400 font-semibold mb-2">Your Answer:</h4>
                   <p className="text-gray-300">{userAnswer}</p>
                 </div>
-                
+
                 <div className="flex gap-4 justify-center flex-wrap">
                   <Button onClick={handleVerifyAnswer} className="bg-blue-600 hover:bg-blue-700">
                     Verify Answer
@@ -274,20 +325,33 @@ const InterviewSession: React.FC<InterviewSessionProps> = ({ interviewType, resu
                     Optimal Answer
                   </Button>
                   <Button onClick={handleNextQuestion} className="bg-red-600 hover:bg-red-700">
-                    {currentQuestion === 14 ? 'Finish Interview' : 'Next Question'}
+                    {currentQuestion === interviewQuestions.length - 1 ? 'Finish Interview' : 'Next Question'}
                   </Button>
                 </div>
 
                 {feedback && (
-                  <div className="bg-blue-900/50 p-4 rounded border border-blue-600">
+                  <div className="bg-blue-900/50 p-3 rounded border border-blue-600"> {/* Corrected border and bg */}
                     <h4 className="text-blue-400 font-semibold mb-2">AI Feedback (Rating: {feedback.rating}/5):</h4>
                     <p className="text-gray-300">{feedback.comment}</p>
                   </div>
                 )}
 
                 {optimalAnswer && (
-                  <div className="bg-green-900/50 p-4 rounded border border-green-600">
-                    <h4 className="text-green-400 font-semibold mb-2">Optimal Answer:</h4>
+                  <div className="bg-green-900/50 p-3 rounded border border-green-600"> {/* Corrected border and bg */}
+                    <h4 className="text-green-400 font-semibold mb-2 flex justify-between items-center">
+                      <span>Optimal Answer:</span>
+                      {isSpeaking && ( // Conditionally render stop button
+                        <Button
+                          onClick={() => {
+                            speechService.stop();
+                            setIsSpeaking(false);
+                            // Do NOT clear optimalAnswer here
+                          }}
+                          variant="ghost"
+                          size="sm"
+                        >
+                          <Square size={16} className="text-red-500" /> Stop Audio</Button>)}
+                    </h4>
                     <p className="text-gray-300">{optimalAnswer}</p>
                   </div>
                 )}
